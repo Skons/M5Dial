@@ -17,6 +17,8 @@ There is a template button sensor that is used as `enter_button` on the lvgl wid
 
 There are breadcrumbs to show on which page you are. This done with 3 arcs that are highlited based on the page that is visible. When the button is in widget scroll mode, an arc the size of all three breadcrumbs is layered over. And last but not least, when the screen goes idle, an arc in the color of the background is layed over. For now every action first unpauses the screen and immediately executes the action, these could be seperate actions.
 
+![idle](/images/thermostat_idle.png) ![idle](/images/thermostat_pageindicator.png) ![idle](/images/thermostat_rotateonpage.png)
+
 The thermostat scroller and the thermostat label will go into blinking mode to show that it is waiting until Home Assistant reports the change back. The new state of the scroller and the target temperature are stored locally and displayed in the widgets, a script waits until the Home Assistant Component of the related entity reports the new setting back.
 
 ### Input select support
