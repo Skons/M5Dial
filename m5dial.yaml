@@ -1,0 +1,1136 @@
+#https://github.com/SmartHome-yourself/m5-dial-for-esphome
+#https://github.com/GinAndBacon/ESPHome-LVGL-EncoderDial
+#https://community.home-assistant.io/t/m5stack-dial-esp32-s3-smart-rotary-knob/623518/182
+
+esphome:
+  name: m5dial
+  friendly_name: M5Dial
+  includes:
+    - hfiles/m5dial.h
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret m5dial_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret m5dial_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  manual_ip:
+    static_ip: !secret m5dial_static_ip
+    gateway: !secret wifi_gateway
+    subnet: !secret wifi_subnet
+
+  ap:
+    ssid: "M5Dial Fallback Hotspot"
+    password: !secret m5dial_ap_password
+
+captive_portal:
+
+web_server:
+
+<<: !include common/colors.yaml
+
+globals:
+  - id: current_page_id
+    type: int
+    restore_value: no
+    initial_value: "1"
+  - id: rotate_pages_maximum
+    type: int
+    restore_value: no
+    initial_value: '3'
+  - id: rotate_pages
+    type: bool
+    restore_value: no
+    initial_value: "true"
+  - id: mediaplayer_volume
+    restore_value: yes
+    type: float
+    initial_value: '0'
+  - id: climate_target_temperature
+    type: float
+    restore_value: yes
+    initial_value: '0'
+  - id: climate_target_temperature_blink
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: climate_zone_select
+    type: std::string
+    restore_value: no
+    initial_value: ''
+  - id: climate_zone_modus_blink
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+substitutions:
+  mediaplayer_entity: media_player.pioneer
+  climate_entity: climate.radiator_thermostaat_kantoor
+  otgw_hotwater_entity: binary_sensor.otgw_domestic_hot_water
+  otgw_centralheating_entity: binary_sensor.otgw_central_heating
+  climate_zone_modus_entity: input_select.heating_zone_modus
+
+font:
+  #- file: "gfonts://Roboto"
+  - file: fonts/Roboto-Medium.ttf
+    id: roboto20
+    size: 20
+    <<: &extras
+      extras:
+        - file: "fonts/materialdesignicons-webfont.ttf"
+          glyphs: [ #https://github.com/juliettef/IconFontCppHeaders/blob/main/IconsMaterialDesignIcons.cs
+            "\U000F0C32", # AlphaXCircleOutline
+            "\U000F004B", # ArrowDownDropCircleOutline
+            "\U000F0238", # Fire
+            "\U000F1722", # FireOff
+            "\U000F0AD8", # RadiatorOff
+            "\U000F1B17", # ThermostatAuto
+            "\U000F058F", # WaterPump;
+            "\U000F0F93", # WaterPumpOff;
+          ]
+  - id: grandstander_32_regular
+    file:
+      type: gfonts
+      family: Grandstander
+      weight: regular
+    size: 32
+    <<: *extras
+
+i2c:
+  - id: bus_internal
+    sda: GPIO11
+    scl: GPIO12
+    scan: False
+
+touchscreen:
+  platform: ft5x06
+  address: 0x38
+  id: m5_touchscreen
+  on_release:
+    - script.execute:
+        id: resume_lvgl
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    timezone: Europe/Amsterdam
+    on_time:
+      - hours: 2,3,4,5
+        minutes: 5
+        seconds: 0
+        then:
+          - switch.turn_on: antiburn_switch
+      - hours: 2,3,4,5
+        minutes: 35
+        seconds: 0
+        then:
+          - switch.turn_off: antiburn_switch
+
+uart:
+  tx_pin: GPIO2
+  rx_pin: GPIO1
+  baud_rate: 256000
+  parity: NONE
+  stop_bits: 1
+
+spi:
+  mosi_pin: GPIO5
+  clk_pin: GPIO6
+
+display:
+  - platform: ili9xxx
+    model: gc9a01a
+    auto_clear_enabled: False
+    update_interval: never
+    invert_colors: true
+    reset_pin: GPIO8
+    id: m5_lcd
+    cs_pin: GPIO7
+    dc_pin: GPIO4
+    dimensions:
+      height: 240
+      width: 240
+
+binary_sensor:
+  - platform: gpio
+    pin: GPIO42
+    id: m5_button
+    on_click:
+      - script.execute:
+          id: resume_lvgl
+      - lambda: |-
+          if (id(rotate_pages) == false) { // use template button to simulate on_click
+            id(rotary_template_button).publish_state(true);
+            id(rotary_template_button).publish_state(false);
+          }
+          else {
+            id(rotate_pages) = false; //enter the page of the rotatable pages
+            id(rotary_button_script)->execute();
+          }
+          ESP_LOGD("m5_button", "on_click, rotate_pages state %s", id(rotate_pages)?"true":"false");
+    on_press:
+      - script.execute:
+          id: resume_lvgl
+      - lambda: |-
+          if (id(rotate_pages) == false) { // use template button to simulate on_click, the state must be false afterwards
+            id(rotary_template_button).publish_state(true);
+            id(rotary_template_button).publish_state(false);
+          }
+          else {
+            id(rotate_pages) = false; //enter the page of the rotatable pages
+            id(rotary_button_script)->execute();
+          }
+          ESP_LOGD("m5_button", "on_press, rotate_pages state %s", id(rotate_pages)?"true":"false");
+    on_release:
+      - lambda: |-
+          id(rotary_template_button).publish_state(false); // make sure the rotary_template_button is false
+          ESP_LOGD("m5_button", "on_release, rotate_pages state %s", id(rotate_pages)?"true":"false");
+    on_double_click:
+      - script.execute:
+          id: resume_lvgl
+      - lambda: |-
+          // switch the rotate_pages state on double_click
+          if (id(rotate_pages) == true) {
+            id(rotate_pages) = false;
+          }
+          else {
+            id(rotate_pages) = true;
+          }
+          id(rotary_button_script)->execute();
+          ESP_LOGD("m5_button", "double_click rotate_pages state %s", id(rotate_pages)?"true":"false"); //enter the page of the rotatable pages
+  - platform: template
+    name: "rotary template button"
+    id: rotary_template_button
+
+number:
+  - platform: template
+    name: LVGL Screen timeout
+    optimistic: true
+    id: display_timeout_number
+    unit_of_measurement: "s"
+    initial_value: 45
+    restore_value: true
+    min_value: 10
+    max_value: 180
+    step: 5
+    mode: box
+    on_value:
+      - lvgl.label.update:
+          id: timeout_label
+          text:
+            format: "%i"
+            args: [ '(int)(id(display_timeout_number).state)' ]
+
+  - platform: template
+    name: LVGL Screen brightness
+    optimistic: true
+    id: backlight_brightness_number
+    initial_value: 45
+    restore_value: true
+    min_value: 0
+    max_value: 100
+    step: 1
+    mode: box
+    on_value:
+      - light.turn_on:
+          id: m5_backlight
+          brightness: !lambda return (id(backlight_brightness_number).state / 100);
+
+switch:
+  - platform: restart
+    id: m5_dial_restart_switch
+    name: "M5 Dial Restart"
+  - platform: template
+    name: Antiburn
+    id: antiburn_switch
+    icon: mdi:television-shimmer
+    optimistic: true
+    entity_category: "config"
+    turn_on_action:
+      - logger.log: "Starting Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+            - delay: 1s
+      - lvgl.pause:
+          show_snow: true
+    turn_off_action:
+      - logger.log: "Stopping Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+            - delay: 1s
+            - lvgl.pause:
+
+sensor:
+  - platform: rotary_encoder
+    name: "Rotary Encoder"
+    id: m5_rotaryencoder
+    resolution: 1
+    pin_a:
+      number: GPIO40
+      mode:
+       input: true
+       pullup: true
+    pin_b:
+      number: GPIO41
+      mode:
+       input: true
+       pullup: true
+    accuracy_decimals: 1
+    on_anticlockwise:
+      - script.execute:
+          id: resume_lvgl
+      - script.execute:
+          id: rotary_encoder_script
+          clockwise: false
+    on_clockwise:
+      - script.execute:
+          id: resume_lvgl
+      - script.execute:
+          id: rotary_encoder_script
+          clockwise: true
+
+  # media player
+  - platform: homeassistant
+    id: mediaplayer_volume_sensor
+    entity_id: $mediaplayer_entity
+    attribute: volume_level
+    on_value:
+      then:
+      - lvgl.arc.update:
+          id: mediaplayer_volume_arc
+          value: !lambda |-
+            int res = (x*100);
+            ESP_LOGD("mediaplayer_volume_sensor", "mediaplayer_volume_arc set to %f", res);
+            return res;
+
+  # climate
+  - platform: homeassistant
+    id: climate_target_temperature_sensor
+    entity_id: $climate_entity
+    attribute: temperature
+    on_value:
+      then:
+      - lvgl.label.update:
+          id: climate_target_temperature_label
+          text:
+            format: "%.1f"
+            args: [ 'x' ]
+      - globals.set:
+          id: climate_target_temperature
+          value: !lambda return x;
+
+  - platform: homeassistant
+    id: climate_current_temperature_sensor
+    entity_id: $climate_entity
+    attribute: current_temperature
+    on_value:
+      then:
+      - lvgl.label.update:
+          id: climate_current_temperature_label
+          text:
+            format: "%.1f"
+            args: [ 'x' ]
+
+text_sensor:
+  # media player
+  - platform: homeassistant
+    id: mediaplayer_source_sensor
+    entity_id: $mediaplayer_entity
+    attribute: source
+    on_value:
+      then:
+      - script.execute:
+          id: resume_lvgl
+      - lvgl.roller.update:
+          id: mediaplayer_roller
+          selected_index: !lambda |-
+            if (strcmp(x.c_str(), "DVD") == 0) {
+              ESP_LOGD("mediaplayer_source_sensor", "mediaplayer_source_sensor set to %s", x.c_str());
+              return 1;
+            }
+            else {
+              ESP_LOGD("mediaplayer_source_sensor", "mediaplayer_source_sensor value %s, set to OTHER", x.c_str());
+              return 0;
+            }
+
+  # climate
+  - platform: homeassistant
+    id: climate_heating_state_sensor
+    entity_id: $climate_entity
+    on_value:
+      then:
+        - script.execute:
+            id: resume_lvgl
+        - lvgl.label.update:
+            id: climate_heating_state_label
+            text: !lambda |-
+              if (x == "auto") {
+                return "\U000F1B17"; // ThermostatAuto
+              } else if (strcmp(x.c_str(), "heat") == 0) {
+                return "\U000F0238"; // Fire
+              } else if (strcmp(x.c_str(), "off") == 0) {
+                return "\U000F0AD8"; // RadiatorOff
+              } else {
+                return "\U000F0C32"; // AlphaXCircleOutline
+              }
+            text_color: !lambda |-
+              if (strcmp(x.c_str(), "auto") == 0) {
+                return id(lv_color_hex(esphomeColorToHex(id(ice_green_color))));
+              } else if (strcmp(x.c_str(), "heat") == 0) {
+                return id(lv_color_hex(esphomeColorToHex(id(ice_orange_color))));
+              } else {
+                return (lv_color_hex(esphomeColorToHex(id(very_dark_grey_color))));
+              }
+
+  - platform: homeassistant
+    id: otgw_centralheating_state_sensor
+    entity_id: $otgw_centralheating_entity
+    on_value:
+      then:
+        - script.execute:
+            id: resume_lvgl
+        - lvgl.label.update:
+            id: otwgw_centralheating_state_label
+            text: !lambda |-
+              if (x == "on") {
+                return "\U000F0238"; // Fire
+              } else if (x == "off") {
+                return "\U000F1722"; // FireOff
+              } else {
+                return "\U000F0C32"; // AlphaXCircleOutline
+              }
+            text_color: !lambda |-
+              if (x == "on") {
+                return id(lv_color_hex(esphomeColorToHex(id(white_color))));
+              } else {
+                return (lv_color_hex(esphomeColorToHex(id(very_dark_grey_color))));
+              }
+
+  - platform: homeassistant
+    id: otgw_hotwater_state_sensor
+    entity_id: $otgw_hotwater_entity
+    on_value:
+      then:
+        - script.execute:
+            id: resume_lvgl
+        - lvgl.label.update:
+            id: otwg_hotwater_state_label
+            text: !lambda |-
+              if (x == "on") {
+                return "\U000F058F";
+              } else if (x == "off") {
+                return "\U000F0F93";
+              } else {
+                return "x";
+              }
+            text_color: !lambda |-
+              if (x == "on") {
+                return id(lv_color_hex(esphomeColorToHex(id(white_color))));
+              } else {
+                return (lv_color_hex(esphomeColorToHex(id(very_dark_grey_color))));
+              }
+
+  - platform: homeassistant
+    id: climate_zone_modus_sensor
+    entity_id: $climate_zone_modus_entity
+    on_value:
+      then:
+        - script.execute:
+            id: resume_lvgl
+        - lvgl.roller.update:
+            id: climate_zone_modus_roller
+            selected_index: !lambda |-
+              // find the index corresponding to the selected value
+              // use it to set the roller with that index
+              const char* orgText = lv_roller_get_options(id(climate_zone_modus_roller));
+              std::vector<std::string> options = splitSelectValues(orgText);
+              for (size_t i = 0; i < options.size(); ++i) {
+                if (x.c_str() == options[i]) {
+                  ESP_LOGD("climate_zone_modus_sensor", "climate_zone_modus_roller option set to index %i with value %s", i, options[i].c_str());
+                  return static_cast<int>(i);
+                }
+              }
+
+              return 0;
+
+light:
+  - platform: monochromatic
+    id: m5_backlight
+    name: "Backlight"
+    output: m5_oledbacklight
+    default_transition_length: 250ms
+
+output:
+  - id: m5_oledbacklight
+    platform: ledc
+    pin: GPIO9
+    max_power: 1
+    min_power: 0.1
+
+lvgl:
+  on_idle:
+    - timeout: !lambda "return (id(display_timeout_number).state * 1000);"
+      then:
+        - logger.log: "LVGL is idle"
+        - lvgl.widget.update:
+            id: top_layer_idle_arc
+            arc_opa: COVER
+        - delay: 1s
+        - light.turn_off: m5_backlight
+        - lvgl.pause:
+  encoders:
+    sensor: m5_rotaryencoder
+    enter_button: rotary_template_button
+    group: control_group
+  theme:
+    arc:
+      arc_color: very_dark_grey_color
+      knob:
+        bg_color: dark_orange_color
+      indicator:
+        arc_color: mid_orange_color
+        arc_width: 16
+    button:
+      text_font: montserrat_18
+      bg_color: very_dark_grey_color
+      checked:
+        bg_color: ice_orange_color
+    label:
+      text_font: montserrat_18
+      text_color: white_color
+    roller:
+      bg_opa: TRANSP
+      text_color: white_color
+      selected:
+        bg_opa: TRANSP
+    slider:
+      bg_opa: COVER
+      bg_color: very_dark_grey_color
+      knob:
+        bg_color: dark_orange_color
+      indicator:
+        bg_color: mid_orange_color
+  displays:
+    - m5_lcd
+  touchscreens:
+    - m5_touchscreen
+  top_layer:
+    widgets:
+      - arc:
+          width: 240
+          height: 240
+          start_angle: 210
+          end_angle: 245
+          align: CENTER
+          arc_width: 5
+          id: top_layer_page1_arc
+          value: 0
+          min_value: 0
+          max_value: 100
+          indicator:
+            opa: TRANSP
+          arc_color: mid_orange_color
+      - arc:
+          width: 240
+          height: 240
+          start_angle: 250
+          end_angle: 290
+          align: CENTER
+          arc_width: 5
+          id: top_layer_page2_arc
+          value: 0
+          min_value: 0
+          max_value: 100
+          indicator:
+            opa: TRANSP
+      - arc:
+          width: 240
+          height: 240
+          start_angle: 295
+          end_angle: 330
+          align: CENTER
+          arc_width: 5
+          id: top_layer_page3_arc
+          value: 0
+          min_value: 0
+          max_value: 100
+          indicator:
+            opa: TRANSP
+      - arc: # complete arc will be colored on active button
+          width: 240
+          height: 240
+          start_angle: 210
+          end_angle: 330
+          align: CENTER
+          arc_width: 5
+          id: top_layer_button_arc
+          value: 0
+          min_value: 0
+          max_value: 100
+          indicator:
+            opa: TRANSP
+          arc_opa: TRANSP
+          arc_color: mid_orange_color
+      - arc: # top layer be black on idle
+          width: 240
+          height: 240
+          start_angle: 210
+          end_angle: 330
+          align: CENTER
+          arc_width: 5
+          id: top_layer_idle_arc
+          value: 0
+          min_value: 0
+          max_value: 100
+          indicator:
+            opa: TRANSP
+          arc_color: black_color
+          arc_opa: TRANSP
+  pages:
+    - id: mediaplayer_page
+      bg_color: black_color
+      widgets:
+        - label:
+            id: mediaplayer_volume_label_title
+            y: -50
+            align: CENTER
+            text: "Pioneer"
+        - arc:
+            width: 200
+            height: 200
+            align: CENTER
+            group: control_group
+            arc_width: 16
+            id: mediaplayer_volume_arc
+            value: 0
+            min_value: 0
+            max_value: 100
+            adjustable: true
+            on_release:
+              - script.execute:
+                  id: mediaplayer_set_volume
+                  volume: !lambda return float(x) / 100;
+        - button:
+            id: mediaplayer_volume_button
+            align: CENTER
+            y: 70
+            width: 50
+            height: 50
+            radius: 3000
+            checkable: true
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\uF011"
+            on_click:
+              - homeassistant.service:
+                  service: homeassistant.toggle
+                  data:
+                    entity_id: $mediaplayer_entity
+        - roller:
+            id: mediaplayer_roller
+            align: CENTER
+            options:
+              - Other
+              - Dvd
+            y: 10
+            mode: infinite
+            visible_row_count: 1
+            on_release:
+              - script.execute:
+                  id: mediaplayer_select_source
+                  source_index: !lambda return int(x);
+    - id: thermostat_page
+      bg_color: black_color
+      widgets:
+        - label:
+            id: climate_current_temperature_label
+            align: CENTER
+            y: -70
+            text: "0"
+            text_font: montserrat_48
+        - label:
+            id: climate_target_temperature_label
+            align: CENTER
+            y: -30
+            text: "0"
+            text_font: montserrat_24
+        - label:
+            id: climate_heating_state_label
+            align: CENTER
+            x: -40
+            y: 70
+            text_font: grandstander_32_regular
+            text: " "
+        - label:
+            id: otwgw_centralheating_state_label
+            align: CENTER
+            x: 0
+            y: 70
+            text_font: grandstander_32_regular
+            text: " "
+        - label:
+            id: otwg_hotwater_state_label
+            align: CENTER
+            x: 40
+            y: 70
+            text_font: grandstander_32_regular
+            text: " "
+        - roller:
+            id: climate_zone_modus_roller
+            align: CENTER
+            options:
+              - Haard
+              - Huis
+              - Kantoor
+              - Open
+              - Uit
+              - Weekend
+              - Werkdag
+            y: 15
+            mode: infinite
+            visible_row_count: 1
+            text_font: montserrat_24
+            on_press:
+              - globals.set: # make sure blinking stops
+                  id: climate_zone_modus_blink
+                  value: !lambda return false;
+              - script.stop: climate_zone_modus_blink_script
+              - script.stop: climate_select_zone_modus
+              - lvgl.roller.update:
+                  id: climate_zone_modus_roller
+                  selected:
+                    text_color: white_color
+            on_value:
+              then:
+                - globals.set: # make sure blinking starts
+                    id: climate_zone_modus_blink
+                    value: !lambda return true;
+                - lambda: |-
+                    // find the index in all values of the roller and return the text value
+                    const char* orgText = lv_roller_get_options(id(climate_zone_modus_roller));
+                    std::vector<std::string> options = splitSelectValues(orgText);
+                    ESP_LOGD("climate_zone_modus_roller", "selected index %i with value %s", x, options[x].c_str());
+                    id(climate_zone_select) = options[x]; //set the selected value
+                    id(climate_zone_modus_blink_script)->execute(); //start blinking
+                    id(climate_select_zone_modus)->execute(options[x]); //start the script that will send the value to HA
+    - id: settings_page
+      bg_color: black_color
+      widgets:
+        - label:
+            id: brightness_label_title
+            align: CENTER
+            y: -40
+            text: "Brightness"
+        - label:
+            id: timeout_label_title
+            align: CENTER
+            y: 40
+            text: "Timeout"
+        - label:
+            id: timeout_label
+            align: CENTER
+            y: 85
+            text: !lambda return std::to_string((int)id(display_timeout_number).state);
+        - slider:
+            width: 160
+            y: -65
+            align: CENTER
+            id: brightness_slider
+            value: !lambda return id(backlight_brightness_number).state;
+            min_value: 0
+            max_value: 100
+            on_release:
+            - number.set:
+                id: backlight_brightness_number
+                value: !lambda return x;
+        - slider:
+            width: 160
+            y: 65
+            align: CENTER
+            id: timeout_slider
+            value: !lambda return (int)(id(display_timeout_number).state);
+            min_value: 10
+            max_value: 180
+            on_value:
+            - number.set:
+                id: display_timeout_number
+                value: !lambda return x;
+            on_release:
+            - number.set:
+                id: display_timeout_number
+                value: !lambda return x;
+        - button:
+            id: settings_reboot_button
+            align: CENTER
+            width: 50
+            height: 50
+            radius: 3000
+            checkable: true
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\uF011"
+            on_click:
+              - switch.toggle: m5_dial_restart_switch
+
+script:
+  - id: resume_lvgl
+    mode: restart
+    then:
+      if:
+        condition: lvgl.is_paused
+        then:
+          - logger.log: "LVGL resuming"
+          - lvgl.resume:
+          - lvgl.widget.redraw:
+          - light.turn_on:
+              id: m5_backlight
+              brightness: !lambda return (id(backlight_brightness_number).state / 100);
+          - lvgl.widget.update:
+              id: top_layer_idle_arc
+              arc_opa: TRANSP
+  - id: top_level_set_active_arc_script
+    mode: restart
+    parameters:
+      current_page_id: int
+    then:
+      - lvgl.arc.update:
+          id: top_layer_page1_arc
+          arc_color: very_dark_grey_color
+      - lvgl.arc.update:
+          id: top_layer_page2_arc
+          arc_color: very_dark_grey_color
+      - lvgl.arc.update:
+          id: top_layer_page3_arc
+          arc_color: very_dark_grey_color
+      - if:
+          condition:
+            lambda: |-
+              return current_page_id == 1;
+          then:
+          - lvgl.arc.update:
+              id: top_layer_page1_arc
+              arc_color: mid_orange_color
+      - if:
+          condition:
+            lambda: |-
+              return current_page_id == 2;
+          then:
+          - lvgl.arc.update:
+              id: top_layer_page2_arc
+              arc_color: mid_orange_color
+      - if:
+          condition:
+            lambda: |-
+              return current_page_id == 3;
+          then:
+          - lvgl.arc.update:
+              id: top_layer_page3_arc
+              arc_color: mid_orange_color
+  - id: mediaplayer_set_volume
+    mode: restart
+    parameters:
+      volume: float
+    then:
+      - delay: 250ms
+      - lambda: |-
+          ESP_LOGD("mediaplayer_set_volume", "Volume to set %f", volume);
+      - homeassistant.service:
+          service: media_player.volume_set
+          data:
+            entity_id: $mediaplayer_entity
+            volume_level: !lambda return volume;
+      - globals.set:
+          id: mediaplayer_volume
+          value: !lambda return volume;
+  - id: mediaplayer_select_source
+    mode: restart
+    parameters:
+      source_index: int
+    then:
+      if:
+        condition:
+          - lambda: |-
+              ESP_LOGD("mediaplayer_select_source", "Source index to set %i", source_index);
+              if (source_index == 1) {
+                ESP_LOGD("mediaplayer_select_source", "Setting source to DVD");
+                return true;
+              }
+              else {
+                ESP_LOGD("mediaplayer_select_source", "Do nothing");
+                return false;
+              }
+        then:
+          - homeassistant.service:
+              service: media_player.select_source
+              data:
+                entity_id: $mediaplayer_entity
+                source: DVD
+  - id: climate_set_target_temperature
+    mode: restart
+    parameters:
+      target_temperature: float
+    then:
+      - delay: 3s
+      - homeassistant.service:
+          service: climate.set_temperature
+          data:
+            entity_id: $climate_entity
+            temperature: !lambda "return target_temperature;"
+      - globals.set:
+          id: climate_target_temperature
+          value: !lambda return target_temperature;
+  - id: climate_select_zone_modus
+    mode: restart
+    parameters:
+      option: std::string
+    then:
+      - delay: 5s
+      - homeassistant.service:
+          service: input_select.select_option
+          data:
+            entity_id: $climate_zone_modus_entity
+            option: !lambda "return option;"
+  - id: climate_zone_modus_blink_script
+    then:
+    - while:
+        condition:
+          - lambda: |-
+              // blink when the selected item has not been reported back by HA
+              // and keep doing it until the blink state is false so we can get back to the default color
+              int compare = strcmp(id(climate_zone_modus_sensor).state.c_str(), id(climate_zone_select).c_str());
+              if (compare != 0 || (compare == 0 && id(climate_zone_modus_blink) == true)) {
+                return true;
+              }
+              else {
+                return false;
+              }
+        then:
+          - lvgl.roller.update:
+              id: climate_zone_modus_roller
+              selected:
+                text_color: !lambda |-
+                  if (id(climate_zone_modus_blink) == true) {
+                    id(climate_zone_modus_blink) = false;
+                     return id(lv_color_hex(esphomeColorToHex(id(white_color))));
+                  }
+                  else {
+                    id(climate_zone_modus_blink) = true;
+                    return id(lv_color_hex(esphomeColorToHex(id(black_color))));
+                  }
+          - delay: 750ms
+  - id: climate_blink_target_temperature
+    then:
+    - while:
+        condition:
+          - lambda: |-
+              // blink when the target temperature has not been reported back by HA
+              // and keep doing it until the blink state is false so we can get back to the default color
+              if ((id(climate_target_temperature) != id(climate_target_temperature_sensor).state) || (id(climate_target_temperature) == id(climate_target_temperature_sensor).state) && id(climate_target_temperature_blink) == true) {
+                return true;
+              }
+              else {
+                return false;
+              }
+        then:
+          - lvgl.label.update:
+              id: climate_target_temperature_label
+              text_color: !lambda |-
+                if (id(climate_target_temperature_blink) == true) {
+                  id(climate_target_temperature_blink) = false;
+                  return id(lv_color_hex(esphomeColorToHex(id(white_color))));
+                }
+                else {
+                  id(climate_target_temperature_blink) = true;
+                  return id(lv_color_hex(esphomeColorToHex(id(black_color))));
+                }
+          - delay: 750ms
+  - id: rotary_button_script
+    mode: single
+    then:
+      - if: # rotate pages both
+          condition:
+            lambda: |-
+              return id(rotate_pages) == true;
+          then:
+            - lvgl.arc.update:
+                id: top_layer_button_arc
+                arc_opa: TRANSP
+            - lvgl.widget.redraw:
+      - if: # rotate pages both
+          condition:
+            lambda: |-
+              return id(rotate_pages) == false;
+          then:
+            - lvgl.arc.update:
+                id: top_layer_button_arc
+                arc_opa: COVER
+            - lvgl.widget.redraw:
+  - id: rotary_encoder_script
+    mode: single
+    parameters:
+      clockwise: bool
+    then:
+      - if: # rotate pages left
+          condition:
+            lambda: |-
+              return (id(rotate_pages) == true && clockwise == false);
+          then:
+            - lvgl.page.previous:
+                animation: OVER_LEFT
+                time: 250ms
+      - if: # rotate pages right
+          condition:
+            lambda: |-
+              return (id(rotate_pages) == true && clockwise == true);
+          then:
+            - lvgl.page.next:
+                animation: OVER_RIGHT
+                time: 250ms
+      - if: # rotate pages both
+          condition:
+            lambda: |-
+              return id(rotate_pages) == true;
+          then:
+            - lambda: |-
+                std::string rotation = "on_clockwise";
+                int value = id(current_page_id);
+                if (clockwise == true) {
+                  value += 1;
+                  if (value > id(rotate_pages_maximum)) { //start with the first page
+                    value = 1;
+                  }
+                }
+                else {
+                  rotation = "on_anticlockwise";
+                  value -= 1;
+                  if (value < 1) { //start with the last page
+                    value = id(rotate_pages_maximum);
+                  }
+                }
+
+                id(current_page_id) = value; //set current active page
+                id(top_level_set_active_arc_script)->execute(value);
+                ESP_LOGD("rotary_encoder", "%s current_page_id %i", rotation.c_str(), id(current_page_id));
+      - if: # mediaplayer_page
+          condition:
+            lambda: |-
+              return id(rotate_pages) == false && id(current_page_id) == 1;
+          then:
+            - lambda: |-
+                std::string rotation = "on_clockwise";
+                float current_volume = id(mediaplayer_volume);
+                float new_volume = current_volume;
+                if (clockwise == true) {
+                  new_volume += 0.01;
+                  if (new_volume < 0.02) {
+                    new_volume = 0.01;
+                  }
+                  else if (new_volume > 1) {
+                    new_volume = 1;
+                  }
+                }
+                else {
+                  rotation = "on_anticlockwise";
+                  new_volume -= 0.01;
+                  if (new_volume < 0.02) {
+                    new_volume = 0.01;
+                  }
+                  else if (new_volume > 1) {
+                    new_volume = 1;
+                  }
+                }
+
+                if (current_volume == new_volume) {
+                  ESP_LOGD("rotary_encoder", "%s no changes to the volume", rotation.c_str());
+                }
+                else {
+                  id(mediaplayer_volume) = new_volume;
+                  id(mediaplayer_set_volume)->execute(new_volume);
+                  ESP_LOGD("rotary_encoder", "%s mediaplayer_volume set to %f", rotation.c_str(), new_volume);
+                }
+      - if: # thermostat_page
+          condition:
+            lambda: |-
+              return id(rotate_pages) == false && id(current_page_id) == 2;
+          then:
+            - globals.set: # make sure blinking starts
+                id: climate_target_temperature_blink
+                value: !lambda return true;
+            - script.execute:
+                id: climate_blink_target_temperature
+            - lambda: |-
+                float current_target_temperature = id(climate_target_temperature);
+                ESP_LOGD("rotary_encoder", "climate_set_target_temperature current_target_temperature is %f", current_target_temperature);
+                std::string rotation = "on_clockwise";
+                if (clockwise == true) {
+                  current_target_temperature += 0.5;
+                }
+                else {
+                  rotation = "on_anticlockwise";
+                  current_target_temperature -= 0.5;
+                }
+
+                id(climate_set_target_temperature)->execute(current_target_temperature);
+                id(climate_target_temperature) = current_target_temperature;
+                ESP_LOGD("rotary_encoder", "%s climate_set_target_temperature set to %f", rotation.c_str(), current_target_temperature);
+            - lvgl.label.update:
+                id: climate_target_temperature_label
+                text:
+                  format: "%.1f"
+                  args: [ 'id(climate_target_temperature)' ]
+      - if: # settings_page
+          condition:
+            lambda: |-
+              return id(rotate_pages) == false && id(current_page_id) == 3;
+          then:
+            - lambda: |-
+                std::string rotation = "on_clockwise";
+                int current_brightness = id(backlight_brightness_number).state;
+                int new_value = current_brightness;
+                if (clockwise == true) {
+                  new_value += 1;
+                }
+                else {
+                  rotation = "on_anticlockwise";
+                  new_value -= 1;
+                }
+                if (new_value < 0) {
+                  new_value = 0;
+                }
+                else if (new_value > 100) {
+                  new_value = 100;
+                }
+
+                if (current_brightness == new_value) {
+                  ESP_LOGD("rotary_encoder", "%s no changes to the brightness", rotation.c_str());
+                }
+                else {
+                  auto bbn = id(backlight_brightness_number).make_call();
+                  bbn.set_value(new_value);
+                  bbn.perform();
+                }
+            - lvgl.slider.update:
+                id: brightness_slider
+                value: !lambda return id(backlight_brightness_number).state;
