@@ -462,8 +462,11 @@ text_sensor:
             selected_index: !lambda |-
               // find the index corresponding to the selected value
               // use it to set the roller with that index
-              const char* orgText = lv_roller_get_options(id(climate_zone_modus_roller));
-              std::vector<std::string> options = splitSelectValues(orgText);
+              // *** the below was the original code that raises the casting error ***
+              //const char* orgText = lv_roller_get_options(id(climate_zone_modus_roller));
+              //std::vector<std::string> options = splitSelectValues(orgText);
+              // *** the below line is the fix that works
+              std::vector<std::string> options = id(climate_zone_modus_roller)->get_options();
               for (size_t i = 0; i < options.size(); ++i) {
                 if (x.c_str() == options[i]) {
                   ESP_LOGD("climate_zone_modus_sensor", "climate_zone_modus_roller option set to index %i with value %s", i, options[i].c_str());
@@ -728,8 +731,11 @@ lvgl:
                     value: !lambda return true;
                 - lambda: |-
                     // find the index in all values of the roller and return the text value
-                    const char* orgText = lv_roller_get_options(id(climate_zone_modus_roller));
-                    std::vector<std::string> options = splitSelectValues(orgText);
+                    // *** not working
+                    //const char* orgText = lv_roller_get_options(id(climate_zone_modus_roller));
+                    //std::vector<std::string> options = splitSelectValues(orgText);
+                    // *** fix
+                    std::vector<std::string> options = id(climate_zone_modus_roller)->get_options();
                     ESP_LOGD("climate_zone_modus_roller", "selected index %i with value %s", x, options[x].c_str());
                     id(climate_zone_select) = options[x]; //set the selected value
                     id(climate_zone_modus_blink_script)->execute(); //start blinking
